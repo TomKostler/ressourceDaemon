@@ -20,14 +20,16 @@
 
 // Bit mask which contains the users wishes of the hardware to track => cpu =
 // 1,ram = 2 ...
-int8_t maskFunctionality = 0;
+int8_t mask_functionality = 0;
 
-void sig_shutdown_handler(int signal) {
 
-    // TODO: Check if more ressources need to be freed
+void output_notification(char *message, char *heading) {
+    char command[512];
 
-    printf("\nShutting down correctly...\n");
-    exit(EXIT_SUCCESS);
+    snprintf(command, sizeof(command),
+             "osascript -e 'display notification \"%s\" with title \"%s\"'",
+             message, heading);
+    system(command);
 }
 
 /*
@@ -68,7 +70,7 @@ float calculate_disc_usage() {
         }
     }
 
-    return total_used / total_size;
+    return total_used / total_size / 100.0;
 }
 
 /*
@@ -165,28 +167,26 @@ int main(int argc, char const *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // set the bitmask
+    // Set the bitmask
     for (int i = 1; argv[i] != NULL; ++i) {
         if (strcmp(argv[i], "cpu") == 0) {
-            maskFunctionality = maskFunctionality | TRACK_CPU;
+            mask_functionality = mask_functionality | TRACK_CPU;
         } else if (strcmp(argv[i], "ram") == 0) {
-            maskFunctionality = maskFunctionality | TRACK_RAM;
+            mask_functionality = mask_functionality | TRACK_RAM;
         } else if (strcmp(argv[i], "disc") == 0) {
-            maskFunctionality = maskFunctionality | TRACK_DISC;
+            mask_functionality = mask_functionality | TRACK_DISC;
         }
     }
 
-    // Signal Handlers
-    signal(SIGABRT, sig_shutdown_handler);
-    signal(SIGINT, sig_shutdown_handler);
-    signal(SIGTERM, sig_shutdown_handler);
-
-    // Make sure only change of rates are notified
-    bool notify_again = true;
     // Make sure there are enough time gaps between notifications
-    int intervall_between_notifies_memory = 0;
-    int intervall_between_notifies_cpu = 0;
-    int intervall_between_notifies_disc = 0;
+    int num_intervalls_above_num_threshold_cpu = 0;
+    int num_intervalls_above_num_threshold_ram = 0;
+    int num_intervalls_above_num_threshold_disc = 0;
+
+    // Define the start thresholds that, when exceeded, trigger notifications
+    int num_threshold_cpu = 4;
+    int num_threshold_ram = 3;
+    int num_threshold_disc = 1;
 
     printf("running on PID %d\n", getpid());
 
@@ -195,66 +195,82 @@ int main(int argc, char const *argv[]) {
     while (true) {
 
         // CPU
-        if ((maskFunctionality & TRACK_CPU) == TRACK_CPU) {
+        if ((mask_functionality & TRACK_CPU) == TRACK_CPU) {
             float cpu_usage = calculate_cpu_usage();
 
-            if (cpu_usage > -1 && cpu_usage > 0.8 &&
-                intervall_between_notifies_cpu > 6) {
+            if (cpu_usage <= 0.8) {
+                num_intervalls_above_num_threshold_cpu = 0;
+            } else {
+                num_intervalls_above_num_threshold_cpu++;
 
-                printf("CPU usage: %f\n", cpu_usage);
+                if (num_intervalls_above_num_threshold_cpu >
+                    num_threshold_cpu) {
+                    printf("CPU Usage: %f\n", cpu_usage);
+                    output_notification(
+                        "High CPU USAGE > 80% for long period of time",
+                        "High CPU Usage");
 
-                const char *command =
-                    "osascript -e 'display notification "
-                    "\"High CPU USAGE > 80% for long period of time\" with "
-                    "title \"High RAM Usage\"'";
-                system(command);
-                intervall_between_notifies_cpu = 0;
+                    num_intervalls_above_num_threshold_cpu = 0;
+                }
             }
-            intervall_between_notifies_cpu++;
         }
 
         // RAM
-        if ((maskFunctionality & TRACK_RAM) == TRACK_RAM) {
+        if ((mask_functionality & TRACK_RAM) == TRACK_RAM) {
             float ram_usage = calculate_memory_usage();
             float swap_pressure = calculate_swap_pressure();
 
-            if (ram_usage > -1 && swap_pressure > -1 && ram_usage > 0.8 &&
-                swap_pressure > 0.6) {
-                if (notify_again && intervall_between_notifies_memory > 5) {
+            if (ram_usage <= 0.8 && swap_pressure <= 0.6) {
+                num_intervalls_above_num_threshold_ram = 0;
+            } else {
+                num_intervalls_above_num_threshold_ram++;
 
+                if (num_intervalls_above_num_threshold_ram >
+                    num_threshold_ram) {
                     printf("RAM Usage: %.2f\n", ram_usage);
                     printf("SWAP Pressure: %.2f\n", swap_pressure);
 
-                    const char *command =
-                        "osascript -e 'display notification "
-                        "\"MEMORY USAGE > 80% \nSWAP PRESSURE > 60%\" with "
-                        "title \"High RAM Usage\"'";
-                    system(command);
-                    notify_again = false;
-                    intervall_between_notifies_memory = 0;
+                    output_notification(
+                        "MEMORY USAGE > 80% \nSWAP PRESSURE > 60%",
+                        "High RAM Usage");
+                    num_intervalls_above_num_threshold_ram = 0;
+                    num_threshold_ram += 2;
                 }
-            } else {
-                notify_again = true;
             }
-            intervall_between_notifies_memory++;
         }
 
         // Disc Usage
-        if ((maskFunctionality & TRACK_DISC) == TRACK_DISC) {
+        if ((mask_functionality & TRACK_DISC) == TRACK_DISC) {
             float disc_usage = calculate_disc_usage();
 
-            if (disc_usage > -1 && disc_usage > 0.9 &&
-                intervall_between_notifies_disc > 14) {
+            if (disc_usage <= 0.9) {
+                num_intervalls_above_num_threshold_disc = 0;
+            } else {
+                num_intervalls_above_num_threshold_disc++;
 
-                printf("Disk usage: %.2f%%\n", disc_usage);
+                if (num_intervalls_above_num_threshold_disc >
+                    num_threshold_disc) {
 
-                const char *command = "osascript -e 'display notification "
-                                      "\"Disc is more than 90% full\" with "
-                                      "title \"Full Disc\"'";
-                system(command);
-                intervall_between_notifies_disc = 0;
+                    printf("Disk usage: %.2f%%\n", disc_usage);
+                    output_notification("Disc is more than 90% full",
+                                        "Full Disc");
+
+                    num_intervalls_above_num_threshold_disc = 0;
+                    num_threshold_disc += 2;
+                }
             }
-            intervall_between_notifies_disc++;
+        }
+
+        // Check if a long time without RAM or disc notifications has been
+        // going on => reset num_thresholds to starting values in order to have
+        // more notifications again
+        if (num_intervalls_above_num_threshold_ram > 15) {
+            num_intervalls_above_num_threshold_ram = 0;
+            num_threshold_ram = 3;
+        }
+        if (num_intervalls_above_num_threshold_disc > 15) {
+            num_intervalls_above_num_threshold_disc = 0;
+            num_threshold_disc = 1;
         }
 
         sleep(20); // Check for changes every 20s
